@@ -87,17 +87,14 @@ private:
     }
 
     int findChild(Node& node, const Key& key) {
-        // Binary search for efficiency, finds the child to descend to
-        int left = 0, right = node.numKeys;
-        while (left < right) {
-            int mid = (left + right) / 2;
-            if (key < node.keys[mid]) {
-                right = mid;
-            } else {
-                left = mid + 1;
+        // Find the leftmost child that could contain the key
+        // This ensures we find the first occurrence of duplicate keys
+        for (int i = 0; i < node.numKeys; i++) {
+            if (key < node.keys[i] || key == node.keys[i]) {
+                return i;
             }
         }
-        return left;
+        return node.numKeys;
     }
 
     bool insertIntoLeaf(Node& leaf, const Record& record) {
@@ -311,7 +308,35 @@ private:
         readNode(nodePos, node);
 
         if (node.isLeaf) {
-            findInLeaf(node, key, results);
+            // Search starting from this leaf and follow next pointers
+            int currentPos = nodePos;
+            while (currentPos != -1) {
+                Node currentLeaf;
+                readNode(currentPos, currentLeaf);
+
+                bool foundInThisLeaf = false;
+                for (int i = 0; i < currentLeaf.numKeys; i++) {
+                    if (currentLeaf.records[i].key == key) {
+                        results.push_back(currentLeaf.records[i].value);
+                        foundInThisLeaf = true;
+                    }
+                }
+
+                // If we didn't find the key in this leaf, check if we should continue
+                if (!foundInThisLeaf) {
+                    // If this leaf has no records or all records are > key, stop
+                    if (currentLeaf.numKeys == 0 || key < currentLeaf.records[0].key) {
+                        break;
+                    }
+                    // If all records in this leaf are < key, it means key might be in next leaf
+                    // But this shouldn't happen if we navigated correctly
+                    // For safety, stop here
+                    break;
+                }
+
+                // Continue to next leaf
+                currentPos = currentLeaf.next;
+            }
         } else {
             int childIdx = findChild(node, key);
             findInternal(node.children[childIdx], key, results);
