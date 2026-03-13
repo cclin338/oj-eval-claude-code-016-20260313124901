@@ -6,10 +6,9 @@
 
 using namespace std;
 
-const int M = 100; // B+ tree order (number of keys per node)
+const int M = 50; // Reduced B+ tree order
 const int MAX_KEY_SIZE = 65;
 const char* INDEX_FILE = "bptree.idx";
-const char* DATA_FILE = "bptree.dat";
 
 struct Key {
     char str[MAX_KEY_SIZE];
@@ -48,12 +47,12 @@ struct Node {
     bool isLeaf;
     int numKeys;
     Key keys[M];
-    int children[M + 1]; // file positions for internal nodes
-    Record records[M]; // for leaf nodes
-    int next; // next leaf node position
+    int children[M + 1];
+    Record records[M];
+    int next;
 
     Node() : isLeaf(true), numKeys(0), next(-1) {
-        memset(children, -1, sizeof(children));
+        for (int i = 0; i <= M; i++) children[i] = -1;
     }
 };
 
@@ -63,18 +62,14 @@ private:
     int root;
     int nodeCount;
 
-    int allocateNode() {
-        return nodeCount++;
-    }
-
     void writeNode(int pos, const Node& node) {
-        indexFile.seekp(sizeof(int) * 2 + pos * sizeof(Node));
+        indexFile.seekp(sizeof(int) * 2 + (long long)pos * sizeof(Node));
         indexFile.write((char*)&node, sizeof(Node));
         indexFile.flush();
     }
 
     void readNode(int pos, Node& node) {
-        indexFile.seekg(sizeof(int) * 2 + pos * sizeof(Node));
+        indexFile.seekg(sizeof(int) * 2 + (long long)pos * sizeof(Node));
         indexFile.read((char*)&node, sizeof(Node));
     }
 
@@ -93,12 +88,20 @@ private:
 
     int findChild(Node& node, const Key& key) {
         int i = 0;
-        while (i < node.numKeys && key.str[0] > node.keys[i].str[0]) i++;
-        while (i < node.numKeys && key.str[0] == node.keys[i].str[0] && strcmp(key.str, node.keys[i].str) >= 0) i++;
+        while (i < node.numKeys && !(key < node.keys[i])) {
+            i++;
+        }
         return i;
     }
 
-    void insertIntoLeaf(Node& leaf, const Record& record) {
+    bool insertIntoLeaf(Node& leaf, const Record& record) {
+        // Check for duplicate
+        for (int i = 0; i < leaf.numKeys; i++) {
+            if (leaf.records[i].key == record.key && leaf.records[i].value == record.value) {
+                return false; // Duplicate, don't insert
+            }
+        }
+
         int i = leaf.numKeys - 1;
         while (i >= 0 && record < leaf.records[i]) {
             leaf.records[i + 1] = leaf.records[i];
@@ -106,9 +109,10 @@ private:
         }
         leaf.records[i + 1] = record;
         leaf.numKeys++;
+        return true;
     }
 
-    int splitLeaf(int leafPos, Node& leaf, const Record& record) {
+    int splitLeaf(int leafPos, Node& leaf, const Record& record, bool& inserted) {
         Node newLeaf;
         newLeaf.isLeaf = true;
         newLeaf.next = leaf.next;
@@ -118,12 +122,21 @@ private:
             temp[i] = leaf.records[i];
         }
 
+        // Check for duplicate
+        for (int i = 0; i < leaf.numKeys; i++) {
+            if (temp[i].key == record.key && temp[i].value == record.value) {
+                inserted = false;
+                return -1;
+            }
+        }
+
         int pos = leaf.numKeys;
         for (int i = leaf.numKeys - 1; i >= 0 && record < temp[i]; i--) {
             temp[i + 1] = temp[i];
             pos = i;
         }
         temp[pos] = record;
+        inserted = true;
 
         int mid = (M + 1) / 2;
         leaf.numKeys = mid;
@@ -136,7 +149,7 @@ private:
             newLeaf.records[i] = temp[mid + i];
         }
 
-        int newLeafPos = allocateNode();
+        int newLeafPos = nodeCount++;
         leaf.next = newLeafPos;
 
         writeNode(leafPos, leaf);
@@ -145,45 +158,58 @@ private:
         return newLeafPos;
     }
 
-    Key insertInternal(int nodePos, const Record& record, int& newChildPos) {
+    bool insertInternal(int nodePos, const Record& record, int& newChildPos, Key& promotedKey) {
         Node node;
         readNode(nodePos, node);
 
         if (node.isLeaf) {
             if (node.numKeys < M) {
-                insertIntoLeaf(node, record);
-                writeNode(nodePos, node);
+                bool ins = insertIntoLeaf(node, record);
+                if (ins) {
+                    writeNode(nodePos, node);
+                }
                 newChildPos = -1;
-                return Key();
+                return ins;
             } else {
-                newChildPos = splitLeaf(nodePos, node, record);
+                bool inserted;
+                newChildPos = splitLeaf(nodePos, node, record, inserted);
+                if (!inserted) {
+                    return false;
+                }
                 Node newChild;
                 readNode(newChildPos, newChild);
-                return newChild.records[0].key;
+                promotedKey = newChild.records[0].key;
+                return true;
             }
         } else {
             int childIdx = findChild(node, record.key);
             int newGrandchildPos;
-            Key promotedKey = insertInternal(node.children[childIdx], record, newGrandchildPos);
+            Key newKey;
+            bool inserted = insertInternal(node.children[childIdx], record, newGrandchildPos, newKey);
+
+            if (!inserted) {
+                newChildPos = -1;
+                return false;
+            }
 
             if (newGrandchildPos == -1) {
                 newChildPos = -1;
-                return Key();
+                return true;
             }
 
             if (node.numKeys < M) {
                 int i = node.numKeys - 1;
-                while (i >= 0 && promotedKey < node.keys[i]) {
+                while (i >= 0 && newKey < node.keys[i]) {
                     node.keys[i + 1] = node.keys[i];
                     node.children[i + 2] = node.children[i + 1];
                     i--;
                 }
-                node.keys[i + 1] = promotedKey;
+                node.keys[i + 1] = newKey;
                 node.children[i + 2] = newGrandchildPos;
                 node.numKeys++;
                 writeNode(nodePos, node);
                 newChildPos = -1;
-                return Key();
+                return true;
             } else {
                 Key tempKeys[M + 1];
                 int tempChildren[M + 2];
@@ -195,12 +221,12 @@ private:
                 tempChildren[node.numKeys] = node.children[node.numKeys];
 
                 int pos = node.numKeys;
-                for (int i = node.numKeys - 1; i >= 0 && promotedKey < tempKeys[i]; i--) {
+                for (int i = node.numKeys - 1; i >= 0 && newKey < tempKeys[i]; i--) {
                     tempKeys[i + 1] = tempKeys[i];
                     tempChildren[i + 2] = tempChildren[i + 1];
                     pos = i;
                 }
-                tempKeys[pos] = promotedKey;
+                tempKeys[pos] = newKey;
                 tempChildren[pos + 1] = newGrandchildPos;
 
                 int mid = (M + 1) / 2;
@@ -220,11 +246,12 @@ private:
                 }
                 newNode.children[newNode.numKeys] = tempChildren[M + 1];
 
-                newChildPos = allocateNode();
+                newChildPos = nodeCount++;
                 writeNode(nodePos, node);
                 writeNode(newChildPos, newNode);
 
-                return tempKeys[mid];
+                promotedKey = tempKeys[mid];
+                return true;
             }
         }
     }
@@ -291,19 +318,23 @@ public:
         if (checkFile.good()) {
             checkFile.close();
             indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
-            readHeader();
-        } else {
-            indexFile.open(INDEX_FILE, ios::out | ios::binary);
+            if (indexFile.good()) {
+                readHeader();
+                return;
+            }
             indexFile.close();
-            indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
-
-            root = 0;
-            nodeCount = 1;
-            Node rootNode;
-            rootNode.isLeaf = true;
-            writeNode(root, rootNode);
-            writeHeader();
         }
+
+        indexFile.open(INDEX_FILE, ios::out | ios::binary);
+        indexFile.close();
+        indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
+
+        root = 0;
+        nodeCount = 1;
+        Node rootNode;
+        rootNode.isLeaf = true;
+        writeNode(root, rootNode);
+        writeHeader();
     }
 
     ~BPlusTree() {
@@ -318,9 +349,10 @@ public:
         record.value = value;
 
         int newChildPos;
-        Key promotedKey = insertInternal(root, record, newChildPos);
+        Key promotedKey;
+        bool inserted = insertInternal(root, record, newChildPos, promotedKey);
 
-        if (newChildPos != -1) {
+        if (inserted && newChildPos != -1) {
             Node newRoot;
             newRoot.isLeaf = false;
             newRoot.numKeys = 1;
@@ -328,8 +360,11 @@ public:
             newRoot.children[0] = root;
             newRoot.children[1] = newChildPos;
 
-            root = allocateNode();
+            root = nodeCount++;
             writeNode(root, newRoot);
+        }
+
+        if (inserted) {
             writeHeader();
         }
     }
@@ -337,7 +372,6 @@ public:
     void remove(const char* keyStr, int value) {
         Key key(keyStr);
         deleteInternal(root, key, value);
-        writeHeader();
     }
 
     vector<int> find(const char* keyStr) {
