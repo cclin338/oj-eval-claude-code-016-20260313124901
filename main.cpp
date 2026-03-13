@@ -6,7 +6,7 @@
 
 using namespace std;
 
-const int M = 50; // Reduced B+ tree order
+const int M = 40; // B+ tree order - balance between performance and memory
 const int MAX_KEY_SIZE = 65;
 const char* INDEX_FILE = "bptree.idx";
 
@@ -320,18 +320,31 @@ private:
 
 public:
     BPlusTree() {
-        ifstream checkFile(INDEX_FILE);
-        if (checkFile.good()) {
+        ifstream checkFile(INDEX_FILE, ios::binary);
+        bool fileExists = checkFile.good();
+
+        if (fileExists) {
+            // Check if file has valid content
+            checkFile.seekg(0, ios::end);
+            long long fileSize = checkFile.tellg();
             checkFile.close();
-            indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
-            if (indexFile.good()) {
-                readHeader();
-                return;
+
+            if (fileSize >= (long long)(sizeof(int) * 2 + sizeof(Node))) {
+                // File exists with valid size, open it
+                indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
+                if (indexFile.good()) {
+                    readHeader();
+                    // Validate header
+                    if (root >= 0 && nodeCount > 0 && nodeCount < 1000000) {
+                        return; // Valid file
+                    }
+                }
+                indexFile.close();
             }
-            indexFile.close();
         }
 
-        indexFile.open(INDEX_FILE, ios::out | ios::binary);
+        // Create new file
+        indexFile.open(INDEX_FILE, ios::out | ios::binary | ios::trunc);
         indexFile.close();
         indexFile.open(INDEX_FILE, ios::in | ios::out | ios::binary);
 
