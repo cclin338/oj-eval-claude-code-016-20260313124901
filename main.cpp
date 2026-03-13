@@ -87,10 +87,20 @@ private:
     }
 
     int findChild(Node& node, const Key& key) {
-        // Find the leftmost child that could contain the key
-        // This ensures we find the first occurrence of duplicate keys
+        // Find child to descend to for this key
+        int i = 0;
+        while (i < node.numKeys && !(key < node.keys[i])) {
+            i++;
+        }
+        return i;
+    }
+
+    int findChildForSearch(Node& node, const Key& key) {
+        // For search, find the leftmost child that could contain the key
+        // This handles the case where key equals a separator
         for (int i = 0; i < node.numKeys; i++) {
-            if (key < node.keys[i] || key == node.keys[i]) {
+            if (!(node.keys[i] < key)) {
+                // key <= node.keys[i], so go to left child
                 return i;
             }
         }
@@ -338,7 +348,7 @@ private:
                 currentPos = currentLeaf.next;
             }
         } else {
-            int childIdx = findChild(node, key);
+            int childIdx = findChildForSearch(node, key);
             findInternal(node.children[childIdx], key, results);
         }
     }
