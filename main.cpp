@@ -87,11 +87,17 @@ private:
     }
 
     int findChild(Node& node, const Key& key) {
-        int i = 0;
-        while (i < node.numKeys && !(key < node.keys[i])) {
-            i++;
+        // Binary search for efficiency, finds the child to descend to
+        int left = 0, right = node.numKeys;
+        while (left < right) {
+            int mid = (left + right) / 2;
+            if (key < node.keys[mid]) {
+                right = mid;
+            } else {
+                left = mid + 1;
+            }
         }
-        return i;
+        return left;
     }
 
     bool insertIntoLeaf(Node& leaf, const Record& record) {
